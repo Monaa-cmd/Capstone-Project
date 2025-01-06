@@ -1,0 +1,242 @@
+---
+title: "Bike Sharing Project"
+author: "Monacmd"
+date: "2024-12-31"
+output: html_document
+code_folding: hide
+code_download: true
+---
+
+# Ask: Stating a business task clearly
+** How do annual members and casual riders use Cyclistic bikes differently?**
+
+
+# Prepare: Importing data from a real dataset
+```{r setting up the environment}
+options(repos = c(CRAN = "https://cran.rstudio.com"))
+install.packages("tidyverse")
+install.packages("lubridate")
+library(tidyverse)
+library(lubridate)
+```
+
+
+*Glance of Dataset* This dataset from Janurary contains information about user's distinctive ID, exact information of their starting and ending station including time, geological information and the name of the station for each of their ride, the type of bike they use(electric or classic) and whether they are member or casual rider.
+```{r Importing the data}
+# List all CSV files
+files <- list.files(path = "D:/Capstone Project/bike_share_2023", pattern = "*.csv", full.names = TRUE)
+
+# verify column names across all files
+lapply(files, function(file) names(read.csv(file))) 
+
+# Combine the data
+bike_sharing_2023 <- lapply(files, read.csv) %>% bind_rows()   
+
+# Validate Data Consistency
+unique(bike_sharing_2023$member_casual)
+unique(bike_sharing_2023$rideable_type)  # Bike type includes "electric_bike" "classic_bike"  "docked_bike". 
+```
+
+```{r check the data}
+glimpse(bike_sharing_2023)
+
+summary(bike_sharing_2023)
+```
+
+
+# Process: Documenting any data cleaning that you perform on the dataset
+
+Since missing value mainly come from the location of the station but individual trip ID is intact, there is no need to remove missing value.
+```{r Check for Missing Value and Dulpicated Value}
+sum(is.na(bike_sharing_2023))   
+sum(duplicated(bike_sharing_2023)) # check for duplicated value, which is 0
+```
+Duplicated value is 0, so we don't need to remove any duplicate (data <- data[!duplicated(data), ])
+
+```{r Verify Data Formats}
+bike_sharing_2023$started_at <- ymd_hms(bike_sharing_2023$started_at)
+bike_sharing_2023$ended_at <- ymd_hms(bike_sharing_2023$ended_at)
+
+bike_sharing_2023$member_casual <- str_trim(bike_sharing_2023$member_casual)
+```
+
+```{r Add a Column Calculating the Duration of Each Ride}
+bike_sharing_2023 <- bike_sharing_2023 %>%
+  mutate(ride_length = as.numeric(difftime(ended_at, started_at, units = "secs")) / 60) 
+```
+
+```{r Check for Logical Errors}
+# Ensure ride_length values are positive
+sum(bike_sharing_2023$ride_length <0)   
+
+# Filter out incorrect data
+bike_sharing_2023 <- bike_sharing_2023 %>%  
+  filter(ride_length > 0)
+```
+
+```{r Visualize Data for Anomalies}
+# Use ggplot2 to check categorical data distribution
+ggplot(bike_sharing_2023, aes(x = member_casual, y=ride_length)) + 
+  geom_point()
+```
+
+
+# Analyze: Analyzing the data and Write a report
+
+## 1. Comparison of member rider and casual rider (proportion)
+
+Member riders account for majority of riders (65.3%), while casual riders make up34.69%. This suggests that member riders are a significant portion of Cyclistic's user base.
+```{r Proportions of Members vs. Casual Riders}
+table(bike_sharing_2023$member_casual) %>%   # check the percentage of riders and bike types
+  prop.table()
+
+table(bike_sharing_2023$rideable_type) %>%  # check the percentage of bikes
+  prop.table()
+```
+
+## 2.Comparison of member rider and casual rider (trip duration)
+
+(usage behavior) Regarding trip duration, however, casual riders tend to have longer trip durations, with a mean trip time of 27.8 minutes compared to 12.1 minutes for members. However, the standard deviation is drastic (247.3 minutes for casual riders and 30.1 minutes for members). This indicates that casual riders primarily use the service for leisure, whereas members might use it for shorter, routine trips.
+
+```{r}
+bike_sharing_2023 %>%
+  group_by(member_casual) %>%
+  summarise(
+    mean_trip = mean(ride_length, na.rm = TRUE),
+    median_trip = median(ride_length, na.rm = TRUE),
+    sd_trip = sd(ride_length, na.rm = TRUE)
+  )
+
+```
+
+Statistical evidence from t-test indicates that the difference in trip durations between casual riders and members is significant (p-value < 0.05).
+```{r t test}
+t.test(
+  ride_length ~ member_casual,
+  data = bike_sharing_2023,
+  var.equal = FALSE  # Use TRUE if variances are equal
+)
+
+```
+
+Casual riders have a significantly longer individual trip duration compared to member riders.
+```
+ggplot(bike_sharing_2023, aes(x = member_casual, y = ride_length, color = member_casual)) + 
+  geom_jitter(alpha = 0.5) +  # Add transparency for better visibility
+  labs(
+    title = "Comparison of Trip Duration Between Member and Casual Rider",
+    x = "Rider Type",
+    y = "Ride Length (Minutes)",
+    color = "Rider Type"
+  ) +
+  theme_minimal() +  # Apply a clean theme
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold")  # Center and style the title
+  )
+```
+
+## 3. Comparison of Rides across Months For Both Types of Riders
+
+Both member and causal riders show an similar upward trend slowly climbing up to the peak in June.
+```{r Compare Yearly Usage Peaks}
+bike_sharing_2023 %>%
+  mutate(month = lubridate::month(started_at, label = TRUE)) %>%   # extract the month
+  group_by(member_casual, month) %>%
+  summarise(trips = n(), .groups= "drop") %>%
+  ggplot(aes(x = month, y = trips, color = member_casual, group = member_casual)) +     #   facet_wrap(~month)
+  geom_line() + 
+  geom_point(size = 2) +
+  labs(title = "Yearly Usage Peaks by Membership Type")+
+  theme_minimal()                                                    
+```
+
+
+## 4. Comparison of Average Daily Usage Peaks
+
+There are a more clear peak hour for members(9am and between 5pm-6pm) and most trips occur during during these two periods. In contrast, there is a much smoother line for casual riders, which peaks also ar round 5pm in a day. This further suggests that the members may tend to be regular commuters and casual riders are tourists.
+```{r}
+average_daily_usage <- bike_sharing_2023 %>%
+  mutate(hour = lubridate::hour(started_at)) %>% 
+  group_by(member_casual, hour) %>%
+  summarise(trips = n(), .groups = "drop") 
+
+  ggplot(average_daily_usage, aes(x = hour, y = trips, color = member_casual, group = member_casual)) +
+  geom_line() +
+  labs(
+    title = "Daily Usage Peaks by Membership Type",
+    x = "Hour of the Day",
+    y = "Number of Trips",
+    color = "Rider Type"
+  ) +
+  theme_minimal()   
+
+```
+
+## 5. Comparison of Types of Bikes Member and Causal Rider Choose 
+
+Casual riders have a bigger tendency to use electric bike compared to classic bikes. It can be due to the comfort electric bike provides(this group may aim for leisure or occasional use to save time). But there is not significant differences between bike differences in members themselves.
+```{r Difference in Bike Types}
+bike_sharing_2023 %>%
+  group_by(member_casual, rideable_type) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  ggplot(aes(x = rideable_type, y = count, fill = member_casual)) +
+  geom_bar(stat = "identity", position = "dodge") +           
+
+  labs(title = "Bike Type Usage by Membership Type")
+```
+
+
+Chi-Squared Test shows that there’s a significant association between the type of bikes and the membership of riders(p<0.005).
+```{r Chi-squared Test: Association between Bike Type and Membership}
+bike_type_table <- table(bike_sharing_2023$member_casual, bike_sharing_2023$rideable_type)  
+
+chisq_test <- chisq.test(bike_type_table)
+print(chisq_test)
+```
+
+## 6. Factors Influencing Membership
+
+1.Bike Type (rideable_type)_Coefficient for "electric_bike"
+  Casual riders tend to prefer electric bikes over classic bikes, suggesting an opportunity to promote membership incentives for frequent electric bike users.
+
+2. Trip Duration (ride_length)_Coefficient 
+  Casual riders tend to take longer trips on average, suggesting a preference for leisurely or non-commuting purposes. Membership campaigns could target casual riders with long trips, emphasizing the cost-effectiveness of memberships.
+```{r Logistic Regression Model: factors influencing membership}
+bike_sharing_filtered <- bike_sharing_2023 %>%
+  filter(rideable_type != "docked_bike") %>%
+  mutate(member_casual_binary = ifelse(member_casual == "member", 1, 0))
+
+
+glm_model <- glm(
+  member_casual_binary ~ rideable_type + ride_length,
+  data = bike_sharing_filtered,
+  family = binomial
+)
+
+
+exp(coef(glm_model))
+summary(glm_model)
+```
+
+
+# Act: Actionable Insights for Stakeholders (Documenting your conclusions and recommendations(3*)) 
+
+  1. Bike Type Preference:
+
+Casual riders are significantly more likely to choose electric bikes compared to members.
+Action: Promote membership plans with incentives tailored to frequent electric bike users, such as discounts or exclusive benefits.
+
+  2. Trip Duration:
+  
+Casual riders take longer trips on average.
+Action: Highlight the cost savings of memberships for long trips, which could appeal to casual riders frequently taking extended leisure rides.
+Marketing Focus:
+
+  3. Target campaigns based on bike type and trip behavior:
+For electric bike users: Showcase membership benefits like unlimited rides or reduced per-minute fees.
+For long-duration riders: Emphasize the financial advantages of a membership plan.
+
+# Other thoughts:Potential Things to investigate in the Future
+Demographics: Gender, age, or employment status.
+Weather Data: Temperature, precipitation, etc.
+Trip Purpose: Whether the trip was for commuting or leisure.
